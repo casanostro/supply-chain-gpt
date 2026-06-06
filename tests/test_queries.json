@@ -1,0 +1,62 @@
+[
+  {
+    "id": "ts_fournisseurs",
+    "question": "Quels sont les 10 fournisseurs avec le pire taux de service ce mois ?",
+    "sql_attendu_contient": ["taux", "fournisseur", "ORDER BY", "ASC"],
+    "description": "Taux de service par fournisseur, trié croissant"
+  },
+  {
+    "id": "ruptures_entrepot",
+    "question": "Quel entrepôt a le plus de produits en rupture aujourd'hui ?",
+    "sql_attendu_contient": ["flag_rupture", "entrepot", "COUNT"],
+    "description": "Comptage ruptures par entrepôt"
+  },
+  {
+    "id": "slob_valeur",
+    "question": "Montre-moi les produits SLOB avec leur valeur de stock",
+    "sql_attendu_contient": ["flag_slob", "stock_physique", "prix_achat_ht"],
+    "description": "Stock SLOB avec valorisation"
+  },
+  {
+    "id": "commandes_retard",
+    "question": "Combien de commandes en retard cette semaine ?",
+    "sql_attendu_contient": ["date_livraison_reelle", "date_livraison_prevue", "COUNT"],
+    "description": "Commandes livrées après la date prévue"
+  },
+  {
+    "id": "points_perdus_categorie",
+    "question": "Top 5 des catégories avec le plus de points perdus",
+    "sql_attendu_contient": ["qte_commandee", "qte_livree", "categorie", "ORDER BY"],
+    "description": "Points perdus agrégés par catégorie produit"
+  },
+  {
+    "id": "taux_service_hebdo",
+    "question": "Taux de service global des 7 derniers jours",
+    "sql_attendu_contient": ["SUM", "qte_livree", "qte_commandee"],
+    "description": "TS global sur rolling 7 jours"
+  },
+  {
+    "id": "stock_couverture",
+    "question": "Produits avec moins de 7 jours de couverture stock",
+    "sql_attendu_contient": ["couverture_jours", "WHERE"],
+    "description": "Alertes stock faible"
+  },
+  {
+    "id": "fournisseur_retards",
+    "question": "Quels fournisseurs livrent le plus souvent en retard ?",
+    "sql_attendu_contient": ["date_livraison_reelle", "date_livraison_prevue", "fournisseur"],
+    "description": "Taux de retard par fournisseur"
+  },
+  {
+    "id": "valeur_commandes_mois",
+    "question": "Valeur totale des commandes passées ce mois par entrepôt",
+    "sql_attendu_contient": ["prix_unitaire_ht", "qte_commandee", "entrepot", "SUM"],
+    "description": "CA commandé par entrepôt sur le mois courant"
+  },
+  {
+    "id": "evolution_ts",
+    "question": "Évolution du taux de service semaine par semaine sur 4 semaines",
+    "sql_attendu_contient": ["strftime", "date_commande", "GROUP BY"],
+    "description": "TS agrégé par semaine ISO"
+  }
+]
