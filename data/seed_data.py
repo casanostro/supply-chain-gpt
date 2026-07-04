@@ -199,7 +199,7 @@ def seed(conn):
                 jours_livraison = random.choices([2, 3, 4, 5, 7], weights=[30, 35, 20, 10, 5])[0]
                 retard = random.choices([0, 1, 2], weights=[70, 20, 10])[0]
                 date_prev = (datetime.strptime(date_cmd, "%Y-%m-%d") + timedelta(days=jours_livraison)).strftime("%Y-%m-%d")
-                date_reel = (datetime.strptime(date_prev, "%Y-%m-%d") + timedelta(days=retard)).strftime("%Y-%m-%d") if day_offset > 3 else None
+                date_reel = (datetime.strptime(date_prev, "%Y-%m-%d") + timedelta(days=retard)).strftime("%Y-%m-%d") if day_offset > 1 else None
 
                 statut = "livree" if date_reel else "en_cours"
                 if nb_colis_livres < nb_colis_cmd and date_reel:

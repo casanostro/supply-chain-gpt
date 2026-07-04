@@ -72,16 +72,35 @@ ORDER BY s.couverture_jours DESC;
 ```
 
 ## Conventions
-- Toujours READ-ONLY : pas de INSERT/UPDATE/DELETE dans sql_validator.py
+- Toujours READ-ONLY : validation 4 couches dans `src/sql_validator.py` (lexicale, mode=ro,
+  authorizer, dry-run EXPLAIN) — ne jamais l'affaiblir
+- Les formules de KPI vivent UNIQUEMENT dans `src/semantic_layer.py` : le system prompt est
+  assemblé au runtime par `build_system_prompt()` — ne pas dupliquer une formule dans
+  `prompts/system_prompt.md`
 - Limiter les résultats à 100 lignes par défaut (LIMIT 100)
-- Arrondir les pourcentages à 1 décimale
+- Arrondir les pourcentages à 1 décimale, NULLIF sur tout dénominateur
 - Dates en ISO 8601 (YYYY-MM-DD)
-- En cas d'erreur SQL → renvoyer à Claude pour correction automatique
+- En cas d'erreur SQL → boucle d'auto-correction (`prompts/fix_prompt.md`), 2 tentatives max
+- Alias SQL en français métier (`taux_service_pct`, pas `svc_rate`)
+
+## Pièges connus de cette base (à vérifier dans toute requête)
+- `stocks` est une table de snapshots multi-dates : toute question au présent exige
+  `date_snapshot = (SELECT MAX(date_snapshot) FROM stocks)`
+- Fan-out : ne jamais agréger un champ d'entête de `commandes` (nb_colis_*) après une
+  jointure sur `lignes_commande`
+- `qte_livree IS NULL` = commande en cours, à exclure des taux de service et points perdus
+
+## Vérification après toute modification
+```bash
+python -m unittest tests.test_offline      # 19 tests sans API
+python tests/run_evals.py --golden         # SQL de référence vs base
+python tests/run_evals.py                  # évals complètes (exige ANTHROPIC_API_KEY)
+```
 
 ## Commandes Claude Code
 ```bash
 claude                          # Ouvre le projet avec CLAUDE.md en contexte
-/ask "Top 5 ruptures par entrepôt"
-/add-table "ventes magasins"
-/test-prompt
+/ask "Top 5 ruptures par entrepôt"     # question métier → SQL testé + analyse
+/add-table "ventes magasins"           # étend seed + couche sémantique + évals
+/test-prompt                           # relance les évals après retouche de prompt
 ```
