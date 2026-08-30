@@ -164,5 +164,5 @@ supply-chain-gpt/
 
 ## Author
 
-Adrien Tripon — Business Analyst Supply Chain Performance  
+Adrien Tripon - Supply Chain & AI Specialist
 [linkedin.com/in/adrien-tripon](https://linkedin.com/in/adrien-tripon)
