@@ -3,13 +3,15 @@ seed_data.py — Génère la BDD SQLite supply chain avec données fictives réa
 Usage : python data/seed_data.py
 """
 
+import argparse
+from contextlib import closing
 import sqlite3
 import random
-from datetime import datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 DB_PATH = Path(__file__).parent / "supply_chain.db"
-random.seed(42)
 
 FOURNISSEURS = [
     ("F001", "Coca-Cola France", "France", "Boissons"),
@@ -147,7 +149,9 @@ def create_schema(conn):
     conn.commit()
 
 
-def seed(conn):
+def seed(conn, as_of=None):
+    today = as_of or date.today()
+    rng = random.Random(42)
     c = conn.cursor()
 
     # Fournisseurs
@@ -165,76 +169,71 @@ def seed(conn):
     # Produits (~375 = 15 templates × 25 fournisseurs)
     prod_id = 1
     for frn_id, (_, nom_frn, _, cat_frn) in enumerate(FOURNISSEURS, 1):
-        for tmpl in random.sample(PRODUITS_TEMPLATES, k=min(15, len(PRODUITS_TEMPLATES))):
-            libelle, cat, sous_cat, poids, prix = tmpl
+        templates = [row for row in PRODUITS_TEMPLATES if row[1] == cat_frn]
+        for variant in range(1, 16):
+            libelle, cat, sous_cat, poids, prix = rng.choice(templates)
             ean = f"340{prod_id:010d}"
             code_g = f"{prod_id:05d}"
             c.execute("INSERT INTO produits VALUES (?,?,?,?,?,?,?,?,?,?)",
-                      (prod_id, ean, code_g, f"{libelle} - {nom_frn}",
+                      (prod_id, ean, code_g, f"{libelle} - {nom_frn} - réf. {variant:02d}",
                        cat, sous_cat, frn_id, poids, prix, 6))
             prod_id += 1
 
     nb_produits = prod_id - 1
 
     # Commandes (90 jours)
-    today = datetime.today()
     cmd_id = 1
     lc_id = 1
     motifs = ["rupture_fournisseur", "transport", "qualite", "annulation_partielle", None, None, None]
 
     for day_offset in range(90, 0, -1):
-        date_cmd = (today - timedelta(days=day_offset)).strftime("%Y-%m-%d")
+        date_cmd = today - timedelta(days=day_offset)
         for entrepot_id in range(1, 7):
-            nb_commandes_jour = random.randint(3, 8)
+            nb_commandes_jour = rng.randint(3, 8)
             for _ in range(nb_commandes_jour):
-                frn_id = random.randint(1, 25)
-                nb_lignes = random.randint(5, 30)
-                nb_colis_cmd = nb_lignes * random.randint(10, 50)
-
-                # TS réaliste : plupart des fournisseurs > 95%, quelques-uns < 90%
-                frn_ts_base = {6: 0.88, 7: 0.87, 21: 0.89}.get(frn_id, random.uniform(0.94, 0.99))
-                nb_colis_livres = int(nb_colis_cmd * frn_ts_base * random.uniform(0.98, 1.0))
-                nb_colis_livres = min(nb_colis_livres, nb_colis_cmd)
-
-                jours_livraison = random.choices([2, 3, 4, 5, 7], weights=[30, 35, 20, 10, 5])[0]
-                retard = random.choices([0, 1, 2], weights=[70, 20, 10])[0]
-                date_prev = (datetime.strptime(date_cmd, "%Y-%m-%d") + timedelta(days=jours_livraison)).strftime("%Y-%m-%d")
-                date_reel = (datetime.strptime(date_prev, "%Y-%m-%d") + timedelta(days=retard)).strftime("%Y-%m-%d") if day_offset > 3 else None
-
-                statut = "livree" if date_reel else "en_cours"
-                if nb_colis_livres < nb_colis_cmd and date_reel:
-                    statut = "partielle"
-
-                numero = f"CMD{cmd_id:06d}"
-                c.execute("INSERT INTO commandes VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                          (cmd_id, numero, frn_id, entrepot_id, date_cmd,
-                           date_prev, date_reel, statut,
-                           nb_lignes, nb_colis_cmd, nb_colis_livres))
-
-                # Lignes de commande
-                produits_commande = random.sample(range(1, nb_produits + 1), k=min(nb_lignes, nb_produits))
-                for prod_id_lc in produits_commande:
-                    qte_cmd = random.randint(6, 120)
-                    ts_ligne = frn_ts_base * random.uniform(0.96, 1.0)
-                    qte_livr = int(qte_cmd * ts_ligne) if statut != "en_cours" else None
-                    motif = random.choice(motifs) if qte_livr and qte_livr < qte_cmd else None
-                    prix = round(random.uniform(0.3, 5.0), 2)
-                    c.execute("INSERT INTO lignes_commande VALUES (?,?,?,?,?,?,?)",
-                              (lc_id, cmd_id, prod_id_lc, qte_cmd, qte_livr, motif, prix))
+                frn_id = rng.randint(1, 25)
+                # 15 références par fournisseur, livrées par cartons de 6 unités.
+                produits = rng.sample(range((frn_id - 1) * 15 + 1, frn_id * 15 + 1),
+                                      k=rng.randint(5, 15))
+                frn_ts_base = {6: 0.88, 7: 0.87, 21: 0.89}.get(frn_id, rng.uniform(0.94, 0.99))
+                transit = rng.choices([2, 3, 4, 5, 7], weights=[30, 35, 20, 10, 5])[0]
+                retard = rng.choices([0, 1, 2], weights=[70, 20, 10])[0]
+                prevue = date_cmd + timedelta(days=transit)
+                reelle = prevue + timedelta(days=retard)
+                recue = reelle <= today
+                lignes = []
+                nb_colis_cmd = 0
+                nb_colis_livres = 0
+                for produit in produits:
+                    colis = rng.randint(1, 20)
+                    nb_colis_cmd += colis
+                    livres = sum(rng.random() < frn_ts_base for _ in range(colis)) if recue else 0
+                    nb_colis_livres += livres
+                    motif = rng.choice(motifs) if recue and livres < colis else None
+                    lignes.append((lc_id, cmd_id, produit, colis * 6, livres * 6 if recue else None,
+                                   motif, round(rng.uniform(0.3, 5.0), 2)))
                     lc_id += 1
 
+                statut = "en_cours"
+                if recue:
+                    statut = "livree" if nb_colis_livres == nb_colis_cmd else "partielle"
+                c.execute("INSERT INTO commandes VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                          (cmd_id, f"CMD{cmd_id:06d}", frn_id, entrepot_id, date_cmd.isoformat(),
+                           prevue.isoformat(), reelle.isoformat() if recue else None, statut,
+                           len(lignes), nb_colis_cmd, nb_colis_livres if recue else None))
+                c.executemany("INSERT INTO lignes_commande VALUES (?,?,?,?,?,?,?)", lignes)
                 cmd_id += 1
 
-    # Stocks (snapshot J et J-7)
+    # Stocks (snapshots J, J-7 et J-30)
     stock_id = 1
     for snap_offset in [0, 7, 30]:
         date_snap = (today - timedelta(days=snap_offset)).strftime("%Y-%m-%d")
-        for prod_id_s in range(1, min(nb_produits + 1, 201)):
+        for prod_id_s in range(1, nb_produits + 1):
             for entrepot_id in range(1, 7):
-                if random.random() < 0.7:
-                    stock_phys = random.randint(0, 500)
-                    stock_dispo = max(0, stock_phys - random.randint(0, 20))
-                    couverture = round(random.uniform(0, 120), 1) if stock_phys > 0 else 0
+                if rng.random() < 0.7:
+                    stock_phys = rng.randint(0, 500)
+                    stock_dispo = max(0, stock_phys - rng.randint(0, 20))
+                    couverture = round(rng.uniform(0, 120), 1) if stock_phys > 0 else 0
                     flag_rupt = 1 if stock_dispo == 0 else 0
                     flag_slob = 1 if couverture > 90 else 0
                     c.execute("INSERT INTO stocks VALUES (?,?,?,?,?,?,?,?,?)",
@@ -247,11 +246,17 @@ def seed(conn):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Génère la base SQLite de démonstration.")
+    parser.add_argument("--as-of", type=date.fromisoformat, default=date.today(), metavar="YYYY-MM-DD",
+                        help="Date de référence des données fictives (par défaut : aujourd’hui).")
+    args = parser.parse_args()
     print(f"Génération de la BDD : {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
-    create_schema(conn)
-    nb_cmd, nb_lc, nb_stocks, nb_prod = seed(conn)
-    conn.close()
+    with TemporaryDirectory(dir=DB_PATH.parent) as tmp:
+        generated = Path(tmp) / DB_PATH.name
+        with closing(sqlite3.connect(generated)) as conn:
+            create_schema(conn)
+            nb_cmd, nb_lc, nb_stocks, nb_prod = seed(conn, args.as_of)
+        generated.replace(DB_PATH)
     print(f"✓ {len(FOURNISSEURS)} fournisseurs")
     print(f"✓ {len(ENTREPOTS)} entrepôts")
     print(f"✓ {nb_prod} produits")

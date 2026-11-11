@@ -3,14 +3,15 @@ app.py — Interface Streamlit SupplyChainGPT
 """
 
 import streamlit as st
-import pandas as pd
+import os
+import sqlite3
 import plotly.express as px
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.db import get_schema_context, run_query
-from src.llm import question_to_sql, explain_result, fix_sql
+from src.db import DB_PATH, get_schema_context, run_query
+from dashboard.review import render as render_review
 
 st.set_page_config(
     page_title="SupplyChainGPT",
@@ -18,8 +19,25 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📦 SupplyChainGPT")
-st.caption("Interroge ta base supply chain en français — propulsé par Claude API")
+st.sidebar.title("SupplyChainGPT")
+mode = st.sidebar.radio("Espace de travail", ["Revue fournisseurs", "Questions en français"])
+if not DB_PATH.is_file():
+    st.info("Génère la base de démonstration avant d’ouvrir l’application.")
+    st.code("python data/seed_data.py", language="bash")
+    st.stop()
+
+if mode == "Revue fournisseurs":
+    render_review()
+    st.stop()
+
+st.title("Questions en français")
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    st.info("Configure ANTHROPIC_API_KEY pour poser une question libre. La revue fournisseurs fonctionne sans clé.")
+    st.stop()
+
+from anthropic import APIError
+from src.llm import question_to_sql, explain_result, fix_sql
+st.caption("Claude reçoit la question, le schéma, le SQL et un extrait de cinq lignes maximum pour commenter les résultats.")
 
 SUGGESTIONS = [
     "Quels sont les 10 fournisseurs avec le pire taux de service ce mois ?",
@@ -32,7 +50,7 @@ SUGGESTIONS = [
 with st.sidebar:
     st.header("Requêtes suggérées")
     for s in SUGGESTIONS:
-        if st.button(s, use_container_width=True):
+        if st.button(s, width="stretch"):
             st.session_state["question"] = s
 
     st.divider()
@@ -44,7 +62,6 @@ with st.sidebar:
 
 question = st.text_input(
     "Pose ta question en français",
-    value=st.session_state.get("question", ""),
     placeholder="Ex : Quels fournisseurs ont un taux de service < 95% ce mois ?",
     key="question"
 )
@@ -52,30 +69,38 @@ question = st.text_input(
 if st.button("Analyser ▶", type="primary") and question:
     with st.spinner("Génération SQL en cours…"):
         schema = get_schema_context()
-        sql = question_to_sql(question, schema)
-
-    with st.expander("SQL généré", expanded=False):
-        st.code(sql, language="sql")
+        try:
+            sql = question_to_sql(question, schema)
+        except APIError:
+            st.error("Claude est indisponible. Vérifie la configuration du modèle et de la clé, puis réessaie.")
+            st.stop()
 
     with st.spinner("Exécution…"):
         try:
             df = run_query(sql)
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             st.warning(f"Erreur SQL — tentative de correction automatique…\n`{e}`")
-            sql = fix_sql(sql, str(e), schema)
             try:
+                sql = fix_sql(sql, str(e), schema)
                 df = run_query(sql)
                 st.success("Requête corrigée automatiquement.")
-            except Exception as e2:
+            except APIError:
+                st.error("Le service de correction est indisponible.")
+                st.stop()
+            except (sqlite3.Error, ValueError) as e2:
                 st.error(f"Échec après correction : {e2}")
                 st.stop()
 
-    st.dataframe(df, use_container_width=True)
+    with st.expander("SQL exécuté"):
+        st.code(sql, language="sql")
+    st.dataframe(df, width="stretch")
+    if len(df) == 100:
+        st.caption("Affichage limité à 100 lignes.")
 
     # Auto-viz
     if len(df) > 0 and len(df.columns) >= 2:
         num_cols = df.select_dtypes("number").columns.tolist()
-        str_cols = df.select_dtypes("object").columns.tolist()
+        str_cols = df.select_dtypes(include=["object", "string"]).columns.tolist()
         if num_cols and str_cols:
             try:
                 fig = px.bar(
@@ -86,14 +111,16 @@ if st.button("Analyser ▶", type="primary") and question:
                     color_discrete_sequence=["#E31837"]
                 )
                 fig.update_layout(xaxis_tickangle=-35)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig)
             except Exception:
                 pass
 
     with st.spinner("Analyse…"):
         preview = df.head(5).to_string(index=False)
-        explication = explain_result(question, sql, preview)
-    st.info(explication)
+        try:
+            st.info(explain_result(question, sql, preview))
+        except APIError:
+            st.warning("Le commentaire est indisponible. Les résultats SQL figurent ci-dessus.")
 
     if question not in st.session_state["history"]:
         st.session_state["history"].append(question)
